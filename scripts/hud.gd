@@ -1,6 +1,6 @@
 extends CanvasLayer
-## Reticle, hitmarker, weapon list with ammo, target health bar, reload prompt and a
-## controls hint. Everything is drawn in code.
+## Reticle, hitmarker, weapon list with ammo, target health bar, reload prompt, grenade
+## and melee ability icons, a melee impact flash and a controls hint. Everything is drawn in code.
 
 const Data := preload("res://scripts/weapon_data.gd")
 const ENEMY_RED := Color(1.0, 0.28, 0.22)
@@ -12,6 +12,8 @@ var _weapons: Array[Label] = []
 var _cross: _Reticle
 var _hitmarker: _Hitmarker
 var _bar: _TargetBar
+var _abilities: _Abilities
+var _impact: ColorRect
 var _hit_time := 0.0
 var _hit_kill := false
 var _target: Node
@@ -54,9 +56,21 @@ func _ready() -> void:
 	_prompt.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.7))
 	add_child(_prompt)
 
+	# Grenade and melee, bottom left.
+	_abilities = _Abilities.new()
+	_full_rect(_abilities)
+
+	_impact = ColorRect.new()
+	_impact.color = Color(1, 1, 1, 0)
+	_full_rect(_impact)
+
 	_hint = Label.new()
-	_hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_hint.position = Vector2(20, -70)
+	_hint.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_hint.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_hint.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_hint.offset_right = -20
+	_hint.offset_bottom = -16
+	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_hint.add_theme_font_size_override("font_size", 14)
 	_hint.modulate = Color(1, 1, 1, 0.7)
 	add_child(_hint)
@@ -91,6 +105,9 @@ func _process(delta: float) -> void:
 	var weapon = player.weapon
 	_update_reticle(player, weapon)
 	_update_weapons(weapon)
+	_abilities.update(player.abilities.grenade_charge, player.abilities.melee_fraction(),
+		player.abilities.GRENADE_RECHARGE, delta)
+	_impact.color.a = maxf(_impact.color.a - delta * 2.5, 0.0)
 
 	var ammo: int = weapon.ammo()
 	var mag: int = weapon.stats["mag"]
@@ -107,7 +124,8 @@ func _process(delta: float) -> void:
 		_prompt.text = ""
 
 	_hint.text = "WASD move · Shift sprint · Space jump (again in air to glide)\n" \
-		+ "LMB fire · RMB aim · R reload · 1 2 3 or wheel switch · [ ] FOV %d · Esc free mouse" % int(player.base_fov)
+		+ "LMB fire · RMB aim · R reload · 1 2 3 or wheel switch\n" \
+		+ "Q grenade · F or mouse thumb melee · [ ] FOV %d · Esc free mouse" % int(player.base_fov)
 
 
 func _update_reticle(player: Node, weapon: Node) -> void:
@@ -146,6 +164,11 @@ func show_hitmarker(crit: bool, killed := false) -> void:
 	_hitmarker.queue_redraw()
 	_hit_kill = killed
 	_hit_time = 0.25 if killed else 0.15
+
+
+## A quick white flash when a punch connects.
+func flash_impact() -> void:
+	_impact.color.a = 0.18
 
 
 func show_target(target: Node) -> void:
@@ -221,3 +244,59 @@ class _TargetBar extends Control:
 		draw_string(font, top + Vector2(0, -8), title, HORIZONTAL_ALIGNMENT_CENTER, w, 16, Color.WHITE)
 		draw_rect(Rect2(top - Vector2(2, 2), Vector2(w + 4, 12)), Color(0, 0, 0, 0.55))
 		draw_rect(Rect2(top, Vector2(w * fill, 8)), color)
+
+
+## Grenade and melee icons, bottom left. Each fills from the bottom as it charges and
+## gives a short pulse the moment it's ready.
+class _Abilities extends Control:
+	const BOX := 54.0
+	const READY := Color(1.0, 0.85, 0.45)
+	var _charges := [1.0, 1.0]
+	var _pulses := [0.0, 0.0]
+	var _grenade_recharge := 20.0
+
+	func update(grenade: float, melee: float, grenade_recharge: float, delta: float) -> void:
+		_grenade_recharge = grenade_recharge
+		var now := [grenade, melee]
+		for i in 2:
+			if now[i] >= 1.0 and _charges[i] < 1.0:
+				_pulses[i] = 1.0
+			_pulses[i] = maxf(_pulses[i] - delta * 2.5, 0.0)
+			_charges[i] = now[i]
+		queue_redraw()
+
+	func _draw() -> void:
+		var font := ThemeDB.fallback_font
+		var keys := ["Q", "F"]
+		for i in 2:
+			var origin := Vector2(28 + i * (BOX + 18), size.y - 150)
+			var rect := Rect2(origin, Vector2(BOX, BOX))
+			var charge: float = _charges[i]
+			var ready := charge >= 1.0
+			# Pulse: the frame grows and glows for a moment.
+			var grow: float = _pulses[i] * 8.0
+			draw_rect(rect.grow(2), Color(0, 0, 0, 0.5))
+			var fill_h := BOX * charge
+			draw_rect(Rect2(origin + Vector2(0, BOX - fill_h), Vector2(BOX, fill_h)),
+				Color(1, 1, 1, 0.28) if not ready else Color(READY.r, READY.g, READY.b, 0.35))
+			var frame := READY if ready else Color(1, 1, 1, 0.45)
+			draw_rect(rect.grow(grow), Color(frame.r, frame.g, frame.b, 1.0 - _pulses[i] * 0.6) if grow > 0.0 else frame, false, 2.0)
+			var c := rect.get_center()
+			var icon := Color(1, 1, 1, 0.95) if ready else Color(1, 1, 1, 0.5)
+			if i == 0:
+				# Grenade: a body with a band, a lever and a ring pin.
+				draw_circle(c + Vector2(0, 4), 13.0, icon)
+				draw_rect(Rect2(c + Vector2(-14, 1), Vector2(28, 5)), Color(0, 0, 0, 0.45))
+				draw_rect(Rect2(c + Vector2(-4, -15), Vector2(8, 6)), icon)
+				draw_line(c + Vector2(4, -13), c + Vector2(12, -4), icon, 3.0)
+				draw_arc(c + Vector2(-9, -15), 4.5, 0.0, TAU, 16, icon, 2.0)
+			else:
+				# Melee: a fist seen from the front, four knuckles over a thumb.
+				for k in 4:
+					draw_rect(Rect2(c + Vector2(-14 + k * 7, -12), Vector2(6, 11)), icon)
+				draw_rect(Rect2(c + Vector2(-14, 0), Vector2(27, 12)), icon)
+				draw_rect(Rect2(c + Vector2(-14, 2), Vector2(14, 4)), Color(0, 0, 0, 0.45))
+			draw_string(font, origin + Vector2(0, BOX + 18), keys[i], HORIZONTAL_ALIGNMENT_CENTER, BOX, 14, Color(1, 1, 1, 0.75))
+			if not ready and i == 0:
+				var secs := ceili((1.0 - charge) * _grenade_recharge)
+				draw_string(font, origin + Vector2(0, -6), "%ds" % secs, HORIZONTAL_ALIGNMENT_CENTER, BOX, 13, Color(1, 1, 1, 0.7))

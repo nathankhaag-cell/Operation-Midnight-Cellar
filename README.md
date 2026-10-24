@@ -21,6 +21,8 @@ All art is original or openly licensed; no Bungie assets are used.
 | Aim down sights | Right mouse | Left trigger |
 | Reload | R | X |
 | Switch weapon | 1 / 2 / 3, mouse wheel | Y |
+| Melee | F, or the mouse's back thumb button | RB / R1 |
+| Grenade | Q | LB / L1 |
 | FOV down / up | `[` / `]` (60 to 110) | |
 | Free the mouse | Esc, click to recapture | |
 
@@ -43,11 +45,25 @@ All art is original or openly licensed; no Bungie assets are used.
   spread that blooms as you fire. On a controller it adds mild aim assist: shots just off a
   target bend toward it (heads first), and look speed slows near targets. Mouse play gets
   neither.
+- `scripts/abilities.gd` handles melee and the grenade. Melee is a heavy punch (150) with
+  about a second between swings. It cancels a reload, and if a target is within about 3 m in
+  front it lunges you in and turns you onto it. The grenade has one charge that refills over
+  20 s. It's thrown in an arc, bounces and rolls, and goes off after 1.6 s or as soon as it
+  touches a target.
+- `scripts/grenade.gd` is the thrown grenade. It moves with ray casts so it can't tunnel
+  through walls, and its light blinks faster as the fuse runs down.
 - `scripts/combat.gd` finds what a shot hit and shows the feedback: floating damage numbers
   (white for body hits, yellow for precision hits), the hitmarker and the target's health bar.
+  It also does explosions: radial damage that falls off toward the edge and is blocked by
+  cover, plus a flash, light, expanding shockwave, sparks, smoke, a scorch mark and camera
+  shake if you're close.
 - `scripts/target.gd` is a practice target with health. The head is the precision spot. It
   flashes on hit, folds down when its health runs out, then resets. A tougher gold "major"
   target stands at the back of the range.
 - `scripts/hud.gd` draws a reticle per weapon that opens with the current spread and turns
   red over a target in range, the hitmarker (bigger on kills), the weapon list with ammo,
-  the target's name and health bar, a reload prompt and the controls hint.
+  the target's name and health bar, a reload prompt, the controls hint, and grenade and
+  melee icons in the bottom left that fill as they charge and pulse when ready.
+- The weapon viewmodel also animates the free arm: a punch straight through the centre of
+  the screen, and a throw where the gun dips and the hand comes up with the grenade and
+  flicks it forward.

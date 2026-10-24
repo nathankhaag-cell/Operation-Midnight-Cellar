@@ -40,12 +40,13 @@ func setup(color: Color, title := "Practice Target", health := 200.0, size := 1.
 	add_child(post)
 
 
-## Applies one hit and reports what happened: {dealt, crit, killed}.
-func take_hit(point: Vector3, amount: float, crit_mult: float) -> Dictionary:
+## Applies one hit and reports what happened: {dealt, crit, killed}. Melee and
+## explosions pass can_crit = false, since only bullets find the precision spot.
+func take_hit(point: Vector3, amount: float, crit_mult: float, can_crit := true) -> Dictionary:
 	if _down:
 		return {"dealt": 0.0, "crit": false, "killed": false}
 	var local := _head.global_transform.affine_inverse() * point
-	var crit := local.y > -_head_half - 0.01
+	var crit := can_crit and local.y > -_head_half - 0.01
 	var dealt := minf(amount * (crit_mult if crit else 1.0), _health)
 	_health -= dealt
 	_flash()
