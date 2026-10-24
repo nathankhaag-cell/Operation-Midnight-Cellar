@@ -14,6 +14,7 @@ const GLIDE_FUEL := 1.4  # seconds of glide per airtime
 const EYE_HEIGHT := 1.65
 
 var mouse_sensitivity := 0.0022
+var using_controller := false  # true while the last input came from a gamepad
 var base_fov := 90.0
 var camera: Camera3D
 var head: Node3D
@@ -56,9 +57,17 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+func _input(event: InputEvent) -> void:
+	# Track the active device so aim assist only helps controller players.
+	if event is InputEventJoypadButton or (event is InputEventJoypadMotion and absf(event.axis_value) > 0.3):
+		using_controller = true
+	elif event is InputEventMouseMotion or event is InputEventMouseButton or event is InputEventKey:
+		using_controller = false
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		var sens := mouse_sensitivity * (0.55 if weapon.is_aiming() else 1.0)
+		var sens: float = mouse_sensitivity * _zoom_sensitivity()
 		rotate_y(-event.relative.x * sens)
 		weapon.add_sway(event.relative)
 		_pitch = clampf(_pitch - event.relative.y * sens, deg_to_rad(-89), deg_to_rad(89))
@@ -119,7 +128,7 @@ func _process(delta: float) -> void:
 	# Controller look on the right stick.
 	var look := Vector2(Input.get_joy_axis(0, JOY_AXIS_RIGHT_X), Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y))
 	if look.length() > 0.15:
-		var rate := 3.0 * (0.5 if weapon.is_aiming() else 1.0) * delta
+		var rate: float = 3.0 * _zoom_sensitivity() * weapon.look_slowdown() * delta
 		rotate_y(-look.x * rate)
 		_pitch = clampf(_pitch - look.y * rate, deg_to_rad(-89), deg_to_rad(89))
 
@@ -136,7 +145,7 @@ func _process(delta: float) -> void:
 
 	var target_fov := base_fov
 	if weapon.is_aiming():
-		target_fov = base_fov * 0.72
+		target_fov = base_fov * weapon.zoom()
 	elif is_sprinting() and flat_speed > 1.0:
 		target_fov = base_fov + 6.0
 	camera.fov = lerpf(camera.fov, target_fov, 1.0 - exp(-12.0 * delta))
@@ -155,11 +164,18 @@ func horizontal_speed() -> float:
 	return Vector2(velocity.x, velocity.z).length()
 
 
-func add_recoil(pitch: float, yaw: float) -> void:
-	_recoil_pitch += pitch
-	_recoil_yaw += yaw
-	# Part of the kick sticks, like Destiny's vertical recoil.
-	_pitch = clampf(_pitch + pitch * 0.35, deg_to_rad(-89), deg_to_rad(89))
+## Kicks the camera. Most of it springs back; `keep` is the share that stays in your
+## aim, so long strings climb and need pulling down, like Destiny's vertical recoil.
+func add_recoil(pitch: float, yaw: float, keep := 0.35) -> void:
+	_recoil_pitch += pitch * (1.0 - keep)
+	_recoil_yaw += yaw * (1.0 - keep)
+	_pitch = clampf(_pitch + pitch * keep, deg_to_rad(-89), deg_to_rad(89))
+	rotate_y(yaw * keep)
+
+
+## Look speed follows the zoom, so tracking feels the same at any FOV.
+func _zoom_sensitivity() -> float:
+	return camera.fov / base_fov
 
 
 static func _ensure_input_actions() -> void:
@@ -173,6 +189,9 @@ static func _ensure_input_actions() -> void:
 		"reload": [KEY_R],
 		"fov_up": [KEY_BRACKETRIGHT],
 		"fov_down": [KEY_BRACKETLEFT],
+		"weapon_1": [KEY_1],
+		"weapon_2": [KEY_2],
+		"weapon_3": [KEY_3],
 	}
 	var pads := {
 		"jump": JOY_BUTTON_A,
@@ -202,6 +221,22 @@ static func _ensure_input_actions() -> void:
 		jm.axis = axes[action][0]
 		jm.axis_value = axes[action][1]
 		InputMap.action_add_event(action, jm)
+	# Cycling: mouse wheel, and Y on a controller.
+	var cycle := {
+		"next_weapon": [MOUSE_BUTTON_WHEEL_DOWN, JOY_BUTTON_Y],
+		"prev_weapon": [MOUSE_BUTTON_WHEEL_UP, -1],
+	}
+	for action in cycle:
+		if InputMap.has_action(action):
+			continue
+		InputMap.add_action(action)
+		var wheel := InputEventMouseButton.new()
+		wheel.button_index = cycle[action][0]
+		InputMap.action_add_event(action, wheel)
+		if cycle[action][1] >= 0:
+			var jb := InputEventJoypadButton.new()
+			jb.button_index = cycle[action][1]
+			InputMap.action_add_event(action, jb)
 	for action in ["fire", "aim"]:
 		if InputMap.has_action(action):
 			continue

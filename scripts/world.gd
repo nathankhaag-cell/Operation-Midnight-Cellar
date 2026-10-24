@@ -32,7 +32,6 @@ func _ready() -> void:
 	var hud := CanvasLayer.new()
 	hud.set_script(preload("res://scripts/hud.gd"))
 	add_child(hud)
-	hud.set_ammo(player.weapon.ammo, player.weapon.MAG_SIZE)
 
 
 func _build_environment() -> void:
@@ -231,6 +230,13 @@ func _build_targets() -> void:
 		add_child(t)
 		t.position = Vector3(-6 + i * 6, 0, -5)
 		t.setup(Color(0.6, 0.6, 0.65))
+	# A tough one at the back of the range for practising precision strings.
+	var major := Node3D.new()
+	major.set_script(preload("res://scripts/target.gd"))
+	add_child(major)
+	major.position = Vector3(-66, -3.0, 11)
+	major.rotation.y = PI / 2
+	major.setup(Color(0.75, 0.6, 0.2), "Heavy Practice Target", 1200.0, 1.5, true)
 
 
 # --- building helpers -------------------------------------------------------
