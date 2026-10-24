@@ -25,6 +25,8 @@ const ADS_POS := Vector3(0.0, -0.0462, -0.24)  # the model's sight line (y = 0.0
 const SPRINT_POS := Vector3(0.11, -0.21, -0.33)
 const SPRINT_ROT := Vector3(-0.25, 0.75, 0.35)
 const SIGHT_Y := 0.077
+const MELEE_TIME := 0.4
+const THROW_TIME := 0.5
 
 var player: CharacterBody3D
 var slot := 0
@@ -58,6 +60,10 @@ var _time := 0.0
 var _over_target := false
 var _assist_angle := 180.0  # degrees from the reticle to the nearest target point
 var _rng := RandomNumberGenerator.new()
+var _melee_t := -1.0  # < 0 when idle, else seconds into the punch
+var _throw_t := -1.0  # < 0 when idle, else seconds into the throw
+var _hand: Node3D  # the free (left) arm used for punches and throws
+var _hand_grenade: Node3D
 
 
 func _ready() -> void:
@@ -70,6 +76,7 @@ func _ready() -> void:
 	_rig.add_child(_model)
 	_equip(0)
 	_rig.position = HIP_POS
+	_build_hand()
 
 
 # --- state other scripts read -------------------------------------------------
@@ -83,7 +90,22 @@ func ammo() -> int:
 
 
 func is_aiming() -> bool:
-	return Input.is_action_pressed("aim") and _reload_t < 0.0 and _switch_t < 0.0
+	return Input.is_action_pressed("aim") and _reload_t < 0.0 and _switch_t < 0.0 and can_act()
+
+
+## False while a punch or throw has the hands busy.
+func can_act() -> bool:
+	return _melee_t < 0.0 and _throw_t < 0.0
+
+
+func play_melee() -> void:
+	_reload_t = -1.0  # a punch cancels the reload, as in Destiny
+	_melee_t = 0.0
+
+
+func play_throw() -> void:
+	_reload_t = -1.0
+	_throw_t = 0.0
 
 
 func is_reloading() -> bool:
@@ -162,9 +184,20 @@ func _process(delta: float) -> void:
 
 
 func _handle_actions(delta: float) -> void:
+	if _melee_t >= 0.0:
+		_melee_t += delta
+		if _melee_t >= MELEE_TIME:
+			_melee_t = -1.0
+	if _throw_t >= 0.0:
+		_throw_t += delta
+		if _throw_t >= THROW_TIME:
+			_throw_t = -1.0
 	for i in Data.ORDER.size():
 		if Input.is_action_just_pressed("weapon_%d" % (i + 1)):
 			switch_to(i)
+
+	if not can_act():
+		return  # no shooting, switching or reloading mid-punch or mid-throw
 
 	if _switch_t >= 0.0:
 		var before := _switch_t
@@ -399,6 +432,34 @@ func _animate(delta: float) -> void:
 	if current_id() != "hand_cannon":
 		_mag.position = _mag_rest + mag_offset
 
+	# Punch: the gun swings down and right out of the way while the free fist drives
+	# straight through the centre of the screen.
+	var hand_pos := Vector3(-0.25, -0.45, -0.1)
+	var hand_rot := Vector3.ZERO
+	if _melee_t >= 0.0:
+		var p := _melee_t / MELEE_TIME
+		var away := _ease(clampf(p / 0.15, 0.0, 1.0)) * (1.0 - _ease(clampf((p - 0.55) / 0.45, 0.0, 1.0)))
+		pos += Vector3(0.09, -0.13, 0.06) * away
+		rot += Vector3(-0.35, -0.45, -0.55) * away
+		hand_pos = _track(p, [[0.0, Vector3(-0.22, -0.35, -0.08)], [0.1, Vector3(-0.14, -0.2, -0.1)],
+			[0.25, Vector3(-0.03, -0.07, -0.5)], [0.45, Vector3(-0.04, -0.08, -0.46)], [1.0, Vector3(-0.25, -0.45, -0.1)]])
+		hand_rot = Vector3(0.1, 0.25, 0.4) * away
+	# Throw: the gun dips, the free hand comes up cocked with the grenade, then flicks
+	# forward and drops away. The grenade leaves the hand at the flick.
+	if _throw_t >= 0.0:
+		var p := _throw_t / THROW_TIME
+		var dip := _ease(clampf(p / 0.15, 0.0, 1.0)) * (1.0 - _ease(clampf((p - 0.55) / 0.45, 0.0, 1.0)))
+		pos += Vector3(0.06, -0.17, 0.05) * dip
+		rot += Vector3(-0.5, 0.2, 0.3) * dip
+		hand_pos = _track(p, [[0.0, Vector3(-0.3, -0.45, -0.2)], [0.2, Vector3(-0.24, -0.1, -0.32)],
+			[0.34, Vector3(-0.08, -0.06, -0.52)], [0.5, Vector3(-0.1, -0.13, -0.46)], [1.0, Vector3(-0.28, -0.45, -0.2)]])
+		hand_rot = _track(p, [[0.0, Vector3(0.4, 0, 0)], [0.2, Vector3(0.5, 0.15, 0.3)], [0.34, Vector3(-0.3, 0.1, 0.1)],
+			[1.0, Vector3(-0.2, 0, 0)]])
+	_hand.visible = _melee_t >= 0.0 or _throw_t >= 0.0
+	_hand.position = hand_pos
+	_hand.rotation = hand_rot
+	_hand_grenade.visible = _throw_t >= 0.0 and _throw_t < 0.13
+
 	_rig.position = pos
 	_rig.rotation = rot
 
@@ -407,6 +468,16 @@ func _animate(delta: float) -> void:
 		if _flash_time <= 0.0:
 			_flash.visible = false
 			_flash_light.visible = false
+
+
+## Smooth interpolation through [time, value] keys, times 0..1 in order.
+func _track(p: float, keys: Array) -> Vector3:
+	for i in range(1, keys.size()):
+		if p <= keys[i][0]:
+			var a: Array = keys[i - 1]
+			var b: Array = keys[i]
+			return (a[1] as Vector3).lerp(b[1], _ease((p - a[0]) / (b[0] - a[0])))
+	return keys[keys.size() - 1][1]
 
 
 func _ease(t: float) -> float:
@@ -596,6 +667,38 @@ func _build_model(m: Dictionary) -> void:
 	_flash_light.omni_range = 4.0
 	_flash_light.visible = false
 	_muzzle.add_child(_flash_light)
+
+
+## The free arm for punches and throws: sleeve, glove with lit knuckles, and a grenade
+## that shows in the palm while winding up a throw. Lives in camera space.
+func _build_hand() -> void:
+	_hand = Node3D.new()
+	_hand.visible = false
+	add_child(_hand)
+	for spec in [
+		[Vector3(0.085, 0.085, 0.36), Vector3(0, -0.01, 0.2), Color(0.22, 0.27, 0.33)],  # sleeve
+		[Vector3(0.1, 0.09, 0.11), Vector3(0, 0, 0), Color(0.1, 0.1, 0.11)],  # glove
+		[Vector3(0.102, 0.02, 0.03), Vector3(0, 0.03, -0.045), Color(0.85, 0.55, 0.2)],  # knuckle plate
+	]:
+		var mi := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = spec[0]
+		mi.mesh = box
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = spec[2]
+		mat.roughness = 0.6
+		mi.material_override = mat
+		mi.position = spec[1]
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_hand.add_child(mi)
+	_hand_grenade = MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.045
+	sphere.height = 0.09
+	(_hand_grenade as MeshInstance3D).mesh = sphere
+	(_hand_grenade as MeshInstance3D).material_override = _emissive(Color(1.0, 0.55, 0.2), 2.0)
+	_hand_grenade.position = Vector3(0.0, 0.06, -0.05)
+	_hand.add_child(_hand_grenade)
 
 
 ## A square ring facing the camera, used for see-through optics.

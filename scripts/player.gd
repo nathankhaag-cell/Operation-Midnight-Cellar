@@ -19,6 +19,7 @@ var base_fov := 90.0
 var camera: Camera3D
 var head: Node3D
 var weapon: Node3D
+var abilities: Node
 
 var _pitch := 0.0
 var _recoil_pitch := 0.0
@@ -27,6 +28,10 @@ var _can_glide := false
 var _gliding := false
 var _glide_left := 0.0
 var _bob_time := 0.0
+var _shake := 0.0  # 0..1 camera shake, decays on its own
+var _shake_time := 0.0
+var _lunge_velocity := Vector3.ZERO
+var _lunge_left := 0.0  # seconds of lunge remaining
 
 
 func _ready() -> void:
@@ -53,6 +58,10 @@ func _ready() -> void:
 	weapon = preload("res://scripts/weapon.gd").new()
 	weapon.player = self
 	camera.add_child(weapon)
+
+	abilities = preload("res://scripts/abilities.gd").new()
+	abilities.player = self
+	add_child(abilities)
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -117,6 +126,14 @@ func _physics_process(delta: float) -> void:
 		else:
 			velocity.y -= GRAVITY * delta
 
+	# A melee lunge takes over horizontal movement for its short burst.
+	if _lunge_left > 0.0:
+		_lunge_left -= delta
+		velocity.x = _lunge_velocity.x
+		velocity.z = _lunge_velocity.z
+		if _lunge_left <= 0.0:
+			velocity *= Vector3(0.15, 1.0, 0.15)  # stop at arm's length instead of sliding on
+
 	move_and_slide()
 
 	if position.y < -50.0:
@@ -137,6 +154,14 @@ func _process(delta: float) -> void:
 	_recoil_yaw = lerpf(_recoil_yaw, 0.0, 1.0 - exp(-8.0 * delta))
 	head.rotation.x = _pitch + _recoil_pitch
 	head.rotation.y = _recoil_yaw
+
+	# Shake: layered sines rather than random jumps, so it rumbles instead of jittering.
+	_shake = maxf(_shake - delta * 1.8, 0.0)
+	_shake_time += delta
+	var k := _shake * _shake * 0.035
+	head.rotation.x += sin(_shake_time * 41.0) * k
+	head.rotation.y += sin(_shake_time * 37.0 + 1.3) * k
+	head.rotation.z = sin(_shake_time * 29.0 + 2.1) * k * 0.6
 
 	var flat_speed := Vector2(velocity.x, velocity.z).length()
 	if is_on_floor() and flat_speed > 0.5:
@@ -173,6 +198,16 @@ func add_recoil(pitch: float, yaw: float, keep := 0.35) -> void:
 	rotate_y(yaw * keep)
 
 
+func add_shake(amount: float) -> void:
+	_shake = clampf(maxf(_shake, amount), 0.0, 1.0)
+
+
+## Drives the player along `vel` (horizontal) for `duration` seconds.
+func lunge(vel: Vector3, duration: float) -> void:
+	_lunge_velocity = vel
+	_lunge_left = duration
+
+
 ## Look speed follows the zoom, so tracking feels the same at any FOV.
 func _zoom_sensitivity() -> float:
 	return camera.fov / base_fov
@@ -192,11 +227,15 @@ static func _ensure_input_actions() -> void:
 		"weapon_1": [KEY_1],
 		"weapon_2": [KEY_2],
 		"weapon_3": [KEY_3],
+		"melee": [KEY_F],
+		"grenade": [KEY_Q],
 	}
 	var pads := {
 		"jump": JOY_BUTTON_A,
 		"sprint": JOY_BUTTON_LEFT_STICK,
 		"reload": JOY_BUTTON_X,
+		"melee": JOY_BUTTON_RIGHT_SHOULDER,
+		"grenade": JOY_BUTTON_LEFT_SHOULDER,
 	}
 	for action in keys:
 		if InputMap.has_action(action):
@@ -221,6 +260,10 @@ static func _ensure_input_actions() -> void:
 		jm.axis = axes[action][0]
 		jm.axis_value = axes[action][1]
 		InputMap.action_add_event(action, jm)
+	# Melee also sits on the mouse's back thumb button.
+	var thumb := InputEventMouseButton.new()
+	thumb.button_index = MOUSE_BUTTON_XBUTTON1
+	InputMap.action_add_event("melee", thumb)
 	# Cycling: mouse wheel, and Y on a controller.
 	var cycle := {
 		"next_weapon": [MOUSE_BUTTON_WHEEL_DOWN, JOY_BUTTON_Y],
